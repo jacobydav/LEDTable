@@ -42,6 +42,12 @@ int inputStringIndex = 0;                    //the current position in the char 
 
 bool runPatternOnce = true;
 
+//Global parameters for the pattern
+//These can be set by serial input
+int delayAmount=100;   //Parameter A
+int fadeStep=100;      //Parameter B
+byte pedalChangeCntThresh=2;  //Parameter C
+
 void setup() 
 {
   Serial.begin(9600);
@@ -68,7 +74,7 @@ void setup()
   //*********overall intensity setup begin********************
   pinMode(ovIntenPin, INPUT);
   //*********overall intensity setup end********************
-  //randomSeed(analogRead(2));  //seed the random number with an unconnected pin(2) read value
+  randomSeed(analogRead(2));  //seed the random number with an unconnected pin(2) read value
   
   k=0;
   
@@ -101,8 +107,6 @@ void serialEvent()
     if(inChar=='\n')
     {
       inputString[inputStringIndex] = '\0'; //Null terminate the string
-      Serial.print("inputString=");
-      Serial.println(inputString);
       if(inputStringIndex>1)
       {
         //Command format = A0123 to set parameter A to value 123
@@ -116,16 +120,32 @@ void serialEvent()
         valStr[4] = '\0'; // place the null terminator
         char * pEnd;
         tempVal = strtol(valStr,&pEnd,10);
-        Serial.print("tempVal=");
-        Serial.println(tempVal);
         //Extract the parameter value
         if(inputString[0]=='A')
         {
-          Serial.print(" setting ovIntScaleVal");
-          ovIntScaleVal = tempVal/100;
-          if(ovIntScaleVal>1)
-            ovIntScaleVal=1;            
+          Serial.print(" setting delayAmount=");
+          Serial.println(tempVal);
+          delayAmount = tempVal;          
         }
+        else if(inputString[0]=='B')
+        {
+          Serial.print(" setting fadeStep=");
+          Serial.println(tempVal);
+          fadeStep = tempVal; 
+        }
+        else if(inputString[0]=='C')
+        {
+          Serial.print(" setting pedalChangeCntThresh=");
+          Serial.println(tempVal);
+          pedalChangeCntThresh = tempVal; 
+        }
+        else if(inputString[0]=='D')
+        {
+          Serial.print(" setting pChange=");
+          Serial.println(tempVal);
+          pChange = tempVal; 
+        }
+        
       }
       // clear the string:
       strcpy(inputString, "X");
@@ -148,9 +168,9 @@ void runPattern4(int runLength)
 {
   int i,j;
   int dir=1;
-  int delayAmount=200;
+  //int delayAmount=100;
   int maxTime=int(20000.0/delayAmount); //max=20 seconds
-  int minTime=int(8000.0/delayAmount);  //min=8 seconds
+  int minTime=int(12000.0/delayAmount);  //min=8 seconds
   //Serial.print("maxTime=");
   //Serial.print(maxTime);
   //Serial.print("minTime=");
@@ -185,11 +205,12 @@ void runPattern4(int runLength)
   long f1TimeOut=random(minTime,maxTime);  //flower 1 timeout
   long f1Time=0;      //flower 1 current time
   //byte pedalChangeCntThresh = 1;  //After this many iterations, change the petal
-  //byte f1CurrPedalChangeCnt = 1;//random(0,pedalChangeCntThresh);
-  //byte f2CurrPedalChangeCnt = 1;//random(0,pedalChangeCntThresh);
+  byte f1CurrPedalChangeCnt = 1;//random(0,pedalChangeCntThresh);
+  byte f2CurrPedalChangeCnt = 1;//random(0,pedalChangeCntThresh);
   //bool f1ChangePetal = false;  //change the petal every other iterations
   //bool f2ChangePetal = true;  //change the petal every other iterations
-  int f1CurrPetal=0;
+  int f1CurrPetal=random(0,numPetals);
+  int f1CurrDir=random(0,2);  //Determines the direction of travel for the petals. 0 = CCW, 1=CW.
   long f2Ind=random(0,numFlowers-1);
   //make sure that flower 2 is different than flower 1
   while(f1Ind==f2Ind)
@@ -197,8 +218,9 @@ void runPattern4(int runLength)
       
   long f2TimeOut=random(minTime,maxTime);  //flower 2 timeout
   long f2Time=0;      //flower 2 current time
-  int f2CurrPetal=0;
-  int fadeStep=(int)(500*ovIntScaleVal);  //Adjust the fadestep for the current intensity scaling factor
+  int f2CurrPetal=random(0,numPetals);
+  int f2CurrDir=random(0,2);  //Determines the direction of travel for the petals. 0 = CCW, 1=CW.
+  //int fadeStep=(int)(250*ovIntScaleVal);  //Adjust the fadestep for the current intensity scaling factor
   
   int ledLevel[]={0,0,0,0,0,0,0,0,0,0, //stores the level for each led
                   0,0,0,0,0,0,0,0,0,0,
@@ -212,10 +234,9 @@ void runPattern4(int runLength)
   
   while(currentPattern==4 && pChange==0 && totRunTime<runLength)
   {
-    Serial.print("ovIntScaleVal=");
-    Serial.println(ovIntScaleVal);
+    
     //Get an updated value for the overall intensity scale factor
-    //calcOvIntScaleFac();
+    calcOvIntScaleFac();
       /* Tlc.clear() sets all the grayscale values to zero, but does not send
          them to the TLCs.  To actually send the data, call Tlc.update() */
       Tlc.clear();
@@ -234,11 +255,22 @@ void runPattern4(int runLength)
        //Serial.print(flowerInds[f1Ind]+indOffset[f1CurrPetal]);
        //Serial.print(" ,"); 
        //After a certain number of iterations, change the petal
-      //if(f1ChangePetal)
-         f1CurrPetal++;       
+      if(f1CurrPedalChangeCnt>=pedalChangeCntThresh)
+      {
+        if(f1CurrDir==0)
+         f1CurrPetal++;
+        else
+         f1CurrPetal--;
+         
+         f1CurrPedalChangeCnt=0;
+      }
+      else
+         f1CurrPedalChangeCnt++;    
        //check to make sure we have not reached the last pedal
        if(f1CurrPetal>=numPetals)
          f1CurrPetal=0;
+       if(f1CurrPetal<0)
+         f1CurrPetal=numPetals-1;
        //increase the time
        f1Time++;
        //Serial.print(f1Time);
@@ -254,7 +286,8 @@ void runPattern4(int runLength)
          
        f1TimeOut=random(minTime,maxTime);  //flower 1 timeout
        f1Time=0;      //flower 1 current time
-       f1CurrPetal=0;
+       f1CurrPetal=random(0,numPetals);
+       f1CurrDir=random(0,2);  //Determines the direction of travel for the petals. 0 = CCW, 1=CW.
      }
      
      //Serial.println("");
@@ -284,14 +317,25 @@ void runPattern4(int runLength)
        //Serial.print(flowerInds[f2Ind]+indOffset[f2CurrPetal]);
        //Serial.print(" ,");
        //After a certain number of iterations, change the petal
-       //if(f2ChangePetal)
-         f2CurrPetal++;
+      if(f2CurrPedalChangeCnt>=pedalChangeCntThresh)
+      {
+        if(f1CurrDir==0)
+          f2CurrPetal++;
+        else
+          f2CurrPetal--;
+          
+         f2CurrPedalChangeCnt=0;
+      }
+      else
+         f2CurrPedalChangeCnt++;
       //Serial.print(" : ");
       //Serial.print(totRunTime);
       //Serial.print(" : ");       
        //check to make sure we have not reached the last pedal
        if(f2CurrPetal>=numPetals)
          f2CurrPetal=0;
+       if(f2CurrPetal<0)
+         f2CurrPetal=numPetals-1;
        //increase the time
        f2Time++;
        //Serial.print(f2Time);
@@ -311,7 +355,8 @@ void runPattern4(int runLength)
          
        f2TimeOut=random(minTime,maxTime);  //flower 2 timeout
        f2Time=0;      //flower 2 current time
-       f2CurrPetal=0;
+       f2CurrPetal=random(0,numPetals);
+       f2CurrDir=random(0,2);  //Determines the direction of travel for the petals. 0 = CCW, 1=CW.
      }
      
      //Serial.println("");
@@ -368,6 +413,8 @@ void calcOvIntScaleFac()
 {
   //Read the potentiometer value
   int ovIntVal=analogRead(ovIntenPin);
+  //Serial.print("ovIntVal=");
+  //Serial.println(ovIntVal);
    //Scale the value
   ovIntScaleVal = (0.75/1024.0)*ovIntVal + 0.25; 
 }
@@ -388,7 +435,7 @@ void loop()
     Serial.println("Loop start");
     pChange = 0;
   
-    runPattern4(5000); 
+    runPattern4(-1); 
    runPatternOnce=false; 
     
 }

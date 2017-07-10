@@ -9,9 +9,9 @@ int spectrumValue[7]; // to hold a2d values
 int recentMax[]={15,15,15,15,15,15,15}; //hold the recent max value returned by MSG
 int recentMin[]={600,600,600,600,600,600,600}; //hold the recent min value returned by MSG
 
-int bandLedNum[]={7,7,5,7,7,5,3};
+int bandLedNum[]={10,10,10,10,10,10,10};
 
-int bandMinGap[]={20,20,20,20,20,20,30};  //Min gap between recentMin and recentMax
+int bandMinGap[]={100,100,100,100,100,100,100};  //Min gap between recentMin and recentMax
 
 int chanHeight=0;  //holds the number of LEDs to activate
      int ledOffset=0;   //holds the current offset for the led index

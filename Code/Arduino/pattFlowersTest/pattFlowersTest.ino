@@ -1,28 +1,25 @@
-#include "Tlc5940.h"
+//Test the flowers pattern. This will light up a random LED and then the surrounding LEDs will light up and create a circle around it.
+#include "src\Adafruit_TLC5947\Adafruit_TLC5947.h"
 #include <avr/interrupt.h>
 
-const int totalPatterns=8;
 const int totalLeds=45;
 
 //This is a representation of the layout of the LEDs viewed from above with the control panel above Row 1.
 //There are 7 rows, Rows 1,3,5,7 have 6 LEDs
 //Rows 2,4,6 have 7 LEDs
-byte ledIndArray[]={  42,44,46,43,47,45, //the index for each led
-                36,37,38,35,39,41,40,
-                 29,30,31,32,34,33,
-                18,21,25,27,26,24,28,
-                 19,17,20,16,23,22,
-                 9,10,13,14, 4,11, 8,
-                  3, 5, 6, 7,12,15};
+byte ledIndArray[]={  29,30,28,27,31,32, //the index for each led
+                      25,26,24,42,36,38,37,
+                      39,40,41,5,4,3,
+                      8,1,6,7,2,45,11,
+                      43,44,9,46,10,47,
+                      20,23,14,17,21,18,19,
+                      16,22,0,12,13,15};
 byte ledRowCnt[] = {6,7,6,7,6,7,6};  //The number of LEDs in each row
 
 volatile int pChange;          // interrupt?
 int currentPattern;
 int k;
-//MSG pin setup
-int analogPin = 0; // read from multiplexer using analog input 0
-int strobePin = 7; // strobe is attached to digital pin 2
-int resetPin = 5; // reset is attached to digital pin 3
+
 //Overall intensity
 //This will give control over the brightness. For example if the table is too
 //bright at night the potentiometer on the control panel can be used to dim it.
@@ -35,6 +32,18 @@ int resetPin = 5; // reset is attached to digital pin 3
 int ovIntenPin = 1; // analog pin 1
 float ovIntScaleVal = 1.0;   
 
+//TLC5947 begin
+// How many boards do you have chained?
+#define NUM_TLC5974 2
+
+#define data_pin   11
+#define clock_pin  10
+#define latch_pin   9
+#define oe  -1  // set to -1 to not use the enable pin (its optional)
+
+Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5974, clock_pin, data_pin, latch_pin);
+//TLC5947 end
+
 //For serial input
 #define INPUT_STRING_MAX 10
 char inputString[INPUT_STRING_MAX];         // a string to hold incoming data
@@ -45,7 +54,7 @@ bool runPatternOnce = true;
 //Global parameters for the pattern
 //These can be set by serial input
 int delayAmount=100;   //Parameter A
-int fadeStep=100;      //Parameter B
+int fadeStep=150;      //Parameter B
 byte pedalChangeCntThresh=2;  //Parameter C
 
 void setup() 
@@ -60,27 +69,26 @@ void setup()
   interrupts();
   pChange=0;
   currentPattern=4;
-  //**********interrupt setup end**************
-  
-  //*********msg setup begin********************
-  pinMode(analogPin, INPUT);
-  pinMode(strobePin, OUTPUT);
-  pinMode(resetPin, OUTPUT);
-  analogReference(DEFAULT);
-
-  digitalWrite(resetPin, LOW);
-  digitalWrite(strobePin, HIGH);
-  //*********msg setup end********************
+  //**********interrupt setup end**************  
   //*********overall intensity setup begin********************
   pinMode(ovIntenPin, INPUT);
   //*********overall intensity setup end********************
   randomSeed(analogRead(2));  //seed the random number with an unconnected pin(2) read value
   
   k=0;
-  
-  /* Call Tlc.init() to setup the tlc.
-     You can optionally pass an initial PWM value (0 - 4095) for all channels.*/
-  Tlc.init(0);
+  //TLC5947 init begin
+  tlc.begin();
+  if (oe >= 0) {
+    pinMode(oe, OUTPUT);
+    digitalWrite(oe, LOW);
+  }
+  //Set the LEDs to zero
+  for(int j=0; j < 48; j++)
+  {
+      tlc.setPWM(j,0);
+  }
+  tlc.write();
+  //TLC5947 init end
 }
 
 // The interrupt hardware calls this 
@@ -237,9 +245,11 @@ void runPattern4(int runLength)
     
     //Get an updated value for the overall intensity scale factor
     calcOvIntScaleFac();
-      /* Tlc.clear() sets all the grayscale values to zero, but does not send
-         them to the TLCs.  To actually send the data, call Tlc.update() */
-      Tlc.clear();
+    //Set the LEDs to zero
+    for(int j=0; j < 48; j++)
+    {
+        tlc.setPWM(j,0);
+    }
       
       //flower 1
      if(f1Time<f1TimeOut)
@@ -382,11 +392,11 @@ void runPattern4(int runLength)
       for(i=0;i<48;i++)
       {
         int adjValue = (int)(ledLevel[i]*ovIntScaleVal);
-        Tlc.set(i, adjValue);
+        tlc.setPWM(i, adjValue);
       }    
       /* Tlc.update() sends the data to the TLCs.  This is when the LEDs will
          actually change. */
-      Tlc.update();
+      tlc.write();
       
       delay(delayAmount);
       //f1ChangePetal = !f1ChangePetal;

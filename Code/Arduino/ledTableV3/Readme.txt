@@ -1,0 +1,1 @@
+This is version 3 of the table. It uses the Adafruit Metro and 2 TLC5947 breakout boards.

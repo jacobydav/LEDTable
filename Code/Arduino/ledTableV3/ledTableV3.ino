@@ -1,29 +1,29 @@
 #include "src\Adafruit_TLC5947\Adafruit_TLC5947.h"
 #include <avr/interrupt.h>
 
-const int totalPatterns=8;
+const int totalPatterns=6;
 const int totalLeds=45;
 
 //This is a representation of the layout of the LEDs viewed from above with the control panel above Row 1.
 //There are 7 rows, Rows 1,3,5,7 have 6 LEDs
 //Rows 2,4,6 have 7 LEDs
-byte ledIndArray[]={  29,30,28,27,31,32, //the index for each led
-                      25,26,24,42,36,38,37,
-                      39,40,41,5,4,3,
-                      8,1,6,7,2,45,11,
-                      43,44,9,46,10,47,
-                      20,23,14,17,21,18,19,
-                      16,22,0,12,13,15};
+byte ledIndArray[]={  32,31,27,28,30,29, //the index for each led
+                      37,38,36,42,24,26,25,
+                      3,4,5,41,40,39,
+                      11,45,2,7,6,1,8,
+                      47,10,46,9,44,43,
+                      19,18,21,17,14,23,20,
+                      15,13,12,0,22,16};
 byte ledRowCnt[] = {6,7,6,7,6,7,6};  //The number of LEDs in each row
 
-volatile int pChange;          // interrupt?
+volatile int pChange;          // interrupt for pattern change
 int currentPattern;
 int k;
 //MSG pin setup
 int analogPin = 0; // read from multiplexer using analog input 0
 int strobePin = 7; // strobe is attached to digital pin 2
 int resetPin = 5; // reset is attached to digital pin 3
-//Overall intensity
+//Overall intensity begin
 //This will give control over the brightness. For example if the table is too
 //bright at night the potentiometer on the control panel can be used to dim it.
 //Every intensity value applied to an LED in any of the patterns will first
@@ -33,7 +33,24 @@ int resetPin = 5; // reset is attached to digital pin 3
 //brightness and 1 is normal brightness. I choose this scale because I don't
 //there is any need to dim the LEDs below 1/4th brightness.
 int ovIntenPin = 1; // analog pin 1
-float ovIntScaleVal = 1.0;   
+int ovIntenMaxVal = 1024; 
+int ovIntenMinVal = 0;
+float ovIntenScaleMax = 1.0;
+float ovIntenScaleMin = 0.0;
+volatile float ovIntScaleVal = 0.5;
+//Overall intensity end
+//Ambient light intensity begin
+byte ambLightPin = 2;  //analog pin 2
+int ambLightMaxVal = 500;   //bright
+int ambLightMinVal = 60;    //dark
+float ambLightScaleMax = 1.0;
+float ambLightScaleMin = 0.2;
+volatile float ambLightScaleVal = 1.0;
+//Ambient light intensity end
+//Motion activation setup begin
+unsigned long motion_on_time_ms = 1800000;   //length of time to remain on without seeing any motion, unit is milliseconds
+volatile unsigned long last_motion_time_ms = 0;   //Last time motion was detected. If curr_time - last_motion_time_ms = motion_on_time_ms, then the table will go to sleep.
+//Motion activation setup end
 
 //TLC5947 begin
 // How many boards do you have chained?
@@ -50,15 +67,29 @@ Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5974, clock_pin, data_pin, latch_
 void setup() 
 {
   //**********interrupt setup begin**************
+  noInterrupts();           // disable all interrupts
+  //Timed interrupt
+  // initialize timer1  
+  TCCR1A = 0;
+  TCCR1B = 0;
+  // Set timer1_counter to the correct value for our interrupt interval
+  TCNT1 = 60000;   // preload timer. We want it to run soon after startup because the intensity adjustments are calculated here. After the first run, there will be no pre-loading.
+  TCCR1B |= (1 << CS12);    // 256 prescaler 
+  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+  //Mode button interrupt - this will change the current LED pattern
   pinMode(2, INPUT);      // Make digital 2 an input
   // attach our interrupt pin to it's ISR
   attachInterrupt(0, patternChange, LOW);
+  //Motion detector interrupt - this will happen when motion is detected
+  pinMode(3, INPUT);      // Make digital 2 an input
+  // attach our interrupt pin to it's ISR
+  attachInterrupt(1, motion_ISR, FALLING);
   // we need to call this to enable interrupts
   interrupts();
   pChange=0;
-  currentPattern=4;  //Set to 1 for standard operation (randomly select patterns). Set this value to a specific pattern number if you want to test only that pattern.
+  currentPattern=1;  //Set to 1 for standard operation (randomly select patterns). Set this value to a specific pattern number if you want to test only that pattern.
   //**********interrupt setup end**************
-  //Serial.begin(9600);
+  Serial.begin(9600); //used in test mode only
   //*********msg setup begin********************
   pinMode(analogPin, INPUT);
   pinMode(strobePin, OUTPUT);
@@ -89,38 +120,73 @@ void setup()
   //TLC5947 end
 }
 
-// The interrupt hardware calls this 
+// The interrupt hardware calls this when the mode button is pressed
 void patternChange()
 {
   pChange=1;
 }
 
+// The interrupt hardware calls this when motion is detected
+void motion_ISR()
+{
+  last_motion_time_ms=millis();
+  //Check if we are currently sleeping
+  if(pChange==2)
+    pChange=0;
+}
+
+//Timed interrupt handler
+//This interrupt routine will be called every few seconds.
+//This is where we will check if it has been too long since motion was detected.
+ISR(TIMER1_OVF_vect)        // interrupt service routine 
+{
+  TCNT1 = 0;   // preload timer
+  unsigned long curr_time = millis();
+  if (curr_time - last_motion_time_ms > motion_on_time_ms)
+  {
+    pChange=2;
+  }
+  //Update the overall intensity begin
+  //Read the potentiometer value
+  int ovIntVal=analogRead(ovIntenPin);
+   //Scale the value
+  ovIntScaleVal = ((ovIntenScaleMax-ovIntenScaleMin)/(ovIntenMaxVal-ovIntenMinVal))*(ovIntVal-ovIntenMinVal) + ovIntenScaleMin;
+  //Update the overall intensity end
+  //Update the intensity based on ambient light begin
+  //Read the potentiometer value
+  int ambLightVal=analogRead(ambLightPin);
+  if(ambLightVal<ambLightMinVal)
+    ambLightVal = ambLightMinVal;
+  if(ambLightVal>ambLightMaxVal)
+    ambLightVal = ambLightMaxVal;
+  //Scale the analog value to between 0.5 and 1 where 0.5 means the room is dark and 1 means the room is bright.
+  ambLightScaleVal = ((ambLightScaleMax-ambLightScaleMin)/(ambLightMaxVal-ambLightMinVal))*(ambLightVal-ambLightMinVal) + ambLightScaleMin;
+   //Scale the value using the overall intensity potentiometer
+  ovIntScaleVal = ambLightScaleVal*ovIntScaleVal;
+  //Update the intensity based on ambient light end
+}
 
 //randomly select a pattern and a timelength to run it
 void runPattern1()
 {
   randomSeed(analogRead(5));  //seed the random number with an unconnected pin(5) read value
-  int pattTime;
-  int minPattTime=30000;  //30 seconds
-  int maxPattTime=300000; //300 seconds or 5 minutes
+  long pattTime;
+  long minPattTime=30000;  //30 seconds
+  long maxPattTime=300000; //300 seconds or 5 minutes
   int currRandPatt;
   //begin loop              
   while(currentPattern==1 && pChange==0)
   {
-         /* Tlc.clear() sets all the grayscale values to zero, but does not send
-         them to the TLCs.  To actually send the data, call Tlc.update() */
-      //Tlc.clear();
        //reset the led levels
-      for(int i=0;i<totalLeds;i++)
+      for(int i=0;i<48;i++)
       {
-         //Tlc.set(i, 0);
+         tlc.setPWM(i, 0);
       }
-     /* Tlc.update() sends the data to the TLCs.  This is when the LEDs will
-         actually change. */
-      //Tlc.update();
+     tlc.write();
+     
       //pick the next pattern at random
       //the total patterns minus the sound activated and the current pattern
-      currRandPatt=random(0,totalPatterns-2);
+      currRandPatt=random(0,totalPatterns-2);      
       //get the run time for the pattern
       pattTime=random(minPattTime,maxPattTime);
       switch (currRandPatt)
@@ -145,16 +211,6 @@ void runPattern1()
              runPattern6(pattTime);
              currentPattern=1;
            break;
-         case 4:
-             currentPattern=7;
-             runPattern7(pattTime);
-             currentPattern=1;
-           break; 
-         case 5:
-             currentPattern=8;
-             runPattern8(pattTime);
-             currentPattern=1;
-           break;   
       }
   }
 
@@ -185,13 +241,6 @@ void runPattern2()
   int bandLedNum[]={5,7,7,6,7,7,6};
   //store the order of leds to use in the msg equalizer
   //there are 7 bands.  Each bands leds are offset by its value in bandLedNum
-//  int msgLedOrd[]={31,38,44,30,35,37,46,
-//                   32,39,47,35,34,43,41,
-//                   26,24,28,33,22,0,
-//                   16,4,12,23,14,11,7,
-//                   20,13,5,17,14,10,6,
-//                   25,21,18,29,19,0,
-//                   27,37,11,0,0};
 
  int msgLedOrd[]={ 7, 2, 6,42,17,
                   41,24,30,26,25,29,28,
@@ -203,13 +252,13 @@ void runPattern2()
 
   int bandMinGap[]={100,100,100,100,100,100,100};  //Min gap between recentMin and recentMax
 
-  for (int i = 0; i < 7; i++)
-  {    
-      Serial.print(bandMinGap[i]);
-      Serial.print("   ");
-  }
-  Serial.println();
-  Serial.println();
+//  for (int i = 0; i < 7; i++)
+//  {    
+//      Serial.print(bandMinGap[i]);
+//      Serial.print("   ");
+//  }
+//  Serial.println();
+//  Serial.println();
   
   delay(100);
     
@@ -317,85 +366,11 @@ void runPattern2()
   }
 }
 
-//race one led at a time
-//with a fading comet tail
-//input: runLength - the number of milliseconds to run this pattern
-void runPattern3(int runLength)
-{
-  byte ledInd;
-  int dir=1;
-  int fadeStep=900;
-  int delayAmount=50;
-  //stores the level for each led
-  int ledLevel[]={0,0,0,0,0,0,
-                 0,0,0,0,0,0,0,
-                  0,0,0,0,0,0,
-                 0,0,0,0,0,0,0,
-                  0,0,0,0,0,0,
-                 0,0,0,0,0,0,0,
-                  0,0,0,0,0,0,0,0,0};
-  int totRunTime=-2;   //the total time the pattern has run
-  //begin loop              
-  while(currentPattern==3 && pChange==0 && totRunTime<runLength)
-  {
-    //Get an updated value for the overall intensity scale factor
-    calcOvIntScaleFac();
-    /* Tlc.clear() sets all the grayscale values to zero, but does not send
-       them to the TLCs.  To actually send the data, call Tlc.update() */
-    
-    //Tlc.clear();
-    //set the levels in the array
-    for(int j=0; j < totalLeds; j++)
-    {
-      ledInd = ledIndArray[j];
-      if(j==k)  //set the current led to its max value
-      {
-        ledLevel[ledInd]=4000;  
-      }
-      else    //fade the led if it is on
-      {
-        if(ledLevel[ledInd]>0)
-        {
-          ledLevel[ledInd]=ledLevel[ledInd]-fadeStep;
-          if(ledLevel[ledInd]<0)  //check to see if the value is negative
-            ledLevel[ledInd]=0;
-        }
-      }
-    } 
-    //set the led values in the tlc
-    for(int j=0; j < totalLeds; j++)
-      {
-          ledInd = ledIndArray[j];
-          //Adjust for the overall intensity scale factor
-          int adjLedLevel = (int)(ledLevel[ledInd]*ovIntScaleVal);
-          //Tlc.set(ledInd,adjLedLevel);        
-      } 
-      k=k+dir;
-      //reset k when it reaches the end
-      if(k==totalLeds-1)
-      {
-        dir=-1;
-      }
-      else if(k==0)
-      {
-        dir=1;
-      }
-        
-    /* Tlc.update() sends the data to the TLCs.  This is when the LEDs will
-       actually change. */
-    //Tlc.update();
-
-    delay(delayAmount);
-    //check to make sure the pattern was called from the random pattern selector
-    if(runLength!=-1)
-       totRunTime=totRunTime+delayAmount;
-  }
-}
-
 //flowers pattern
+//************************************************************************************************
 //lit up a central led, then have the surrounding leds
 //move in a circle around it
-void runPattern4(int runLength)
+void runPattern3(long runLength)
 {
   int i,j;
   int dir=1;
@@ -463,13 +438,10 @@ void runPattern4(int runLength)
         
   //offsets are where to start finding the values for each flower
   //int ledOffsets[]={0,8,16,23,32,39,47,54,60,67};
-  int totRunTime=-2;   //the total time the pattern has run
+  long totRunTime=-2;   //the total time the pattern has run
   
-  while(currentPattern==4 && pChange==0 && totRunTime<runLength)
+  while(currentPattern==3 && pChange==0 && totRunTime<runLength)
   {
-    
-    //Get an updated value for the overall intensity scale factor
-    calcOvIntScaleFac();
     //Set the LEDs to zero
     for(int j=0; j < 48; j++)
     {
@@ -588,11 +560,11 @@ void runPattern4(int runLength)
 
 
 //by color
-//
-void runPattern5(int runLength)
+//******************************************************************************************************
+void runPattern4(long runLength)
 {
   int i;
-  randomSeed(analogRead(2));  //seed the random number with an unconnected pin(2) read value
+  randomSeed(analogRead(5));  //seed the random number with an unconnected pin(5) read value
   int fadeOutStepMin=50;
   int fadeOutStepMax=150;
   int fadeInStepMin=30;
@@ -604,44 +576,49 @@ void runPattern5(int runLength)
   int dir=1;  //direction; fading in=1 fading out=-1
   //byte ledInd;
   
-  int ledLevel[]={0,0,0,0,0,0,0,0,0,0,0,0, //stores the level for each led
-                0,0,0,0,0,0,0,0,0,0,0,0,
-                0,0,0,0,0,0,0,0,0,0,0,0,
-                0,0,0,0,0,0,0,0,0,0,0,0};
+  int ledLevel[]={0,0,0,0,0,0,0,0,0,0, //stores the level for each led
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0};
                
   //by color fade variables
   int bcNum=8;
   int bcLedNum[]={6,6,6,6,6,6,3,6}; //orange, aqua, red, yellow, green, violet, white, blue, 
-  int bcLedOrd[]={47,40,18,17,13,7,
-                45,29,21,20,14,12,
-                44,35,32,24,22,3,
-                43,41,33,19,10,6,
-                46,39,34,28,9,5,
-                36,30,25,16,4,15,
-                37,27,11,
-                42,38,31,26,23,8};
-  int totRunTime=-2;   //the total time the pattern has run
+  //Note: Use the LED index from the physical layout. The physical layout is numbered 0-47
+  //top to bottom, left to right. Viewed from the top of the table with the control panel at the top.
+  int bcLedOrd[]={4,12,19,27,34,42,
+                  5,13,20,28,35,43,
+                  1,9,16,24,31,39,
+                  3,11,18,26,33,41,
+                  2,10,17,25,32,40,
+                  6,14,21,29,36,44,
+                  7,22,37,
+                  0,8,15,23,30,38};
+  long totRunTime=-2;   //the total time the pattern has run
   int currCol=random(0,bcNum);
   //calculate the offset
   for(i=0;i<currCol;i++)
      ledOffset=ledOffset+bcLedNum[i];
-  
-  while(currentPattern==5 && pChange==0 && totRunTime<runLength)
+
+  //Set the LEDs to zero
+  for(int j=0; j < 48; j++)
   {
-      /* Tlc.clear() sets all the grayscale values to zero, but does not send
-         them to the TLCs.  To actually send the data, call Tlc.update() */
-      //Tlc.clear();
-      
+      tlc.setPWM(j,0);
+  }
+  
+  while(currentPattern==4 && pChange==0 && totRunTime<runLength)
+  {  
       //fade currently lit leds
       if(dir==1) //fading in
       {
         for(i=ledOffset;i<(ledOffset+bcLedNum[currCol]);i++)
         {
-            ledLevel[bcLedOrd[i]]=ledLevel[bcLedOrd[i]]+fadeInStep;
+            ledLevel[ledIndArray[bcLedOrd[i]]]=ledLevel[ledIndArray[bcLedOrd[i]]]+fadeInStep;
             
-            if(ledLevel[bcLedOrd[i]]>4000)
+            if(ledLevel[ledIndArray[bcLedOrd[i]]]>4000)
             {
-              ledLevel[bcLedOrd[i]]=4000;
+              ledLevel[ledIndArray[bcLedOrd[i]]]=4000;
               dir=-1;
             }
         }
@@ -650,11 +627,11 @@ void runPattern5(int runLength)
       {
         for(i=ledOffset;i<(ledOffset+bcLedNum[currCol]);i++)
         {
-            ledLevel[bcLedOrd[i]]=ledLevel[bcLedOrd[i]]-fadeOutStep;
+            ledLevel[ledIndArray[bcLedOrd[i]]]=ledLevel[ledIndArray[bcLedOrd[i]]]-fadeOutStep;
             
-            if(ledLevel[bcLedOrd[i]]<0) //change direction
+            if(ledLevel[ledIndArray[bcLedOrd[i]]]<0) //change direction
             {
-              ledLevel[bcLedOrd[i]]=0;
+              ledLevel[ledIndArray[bcLedOrd[i]]]=0;
               dir=1;
             }
         }
@@ -676,15 +653,14 @@ void runPattern5(int runLength)
         }
       }
       //set the TLC
-      for(i=0;i<totalLeds;i++)
+      for(i=0;i<48;i++)
       {
         //Adjust for the overall intensity scale factor
         int adjLedLevel = (int)(ledLevel[i]*ovIntScaleVal);
-        //Tlc.set(i, adjLedLevel);
+        tlc.setPWM(i, adjLedLevel);
       }    
-      /* Tlc.update() sends the data to the TLCs.  This is when the LEDs will
-         actually change. */
-      //Tlc.update();
+
+     tlc.write();
       
       delay(delayAmount);
       //check to make sure the pattern was called from the random pattern selector
@@ -693,36 +669,268 @@ void runPattern5(int runLength)
   }
 }
 
-//left to right
-void runPattern6(int runLength)
-{
-  
-}
-
 //cross swirl
-void runPattern7(int runLength)
+//*************************************************************************************************************************
+void runPattern5(long runLength)
 {
+  int i,j;
+  int delayAmount=80;   //Parameter A
+  int fadeStep=200;      //Parameter B 
+  //Each row is the indeces of the LEDs for a position in the swirl.
+  //Note: These are indeces based on the physical layout. So they should be referenced to ledIndArray.
+ //Do not include the center LED 
+  byte swirlInds[] = { 0,1,8,15,29,36,43,44,
+                       2,9,16,28,35,42,
+                       3,10,16,28,34,41,
+                       4,11,17,16,28,27,33,40,
+                       5,4,10,16,28,34,40,39,
+                       5,12,18,17,23,21,27,26,32,39,
+                       18,17,23,21,27,26,
+                       25,24,23,21,20,19,
+                       31,30,23,21,14,13,
+                       44,38,31,30,23,21,14,13,6,0,
+                       43,37,30,29,15,14,7,1};
+                       
+  byte swirlCnt[] = {8,6,6,8,8,10,6,6,6,10,8};
+                        
+  byte numPos = 11;  //the number of swirl positions
   
+  int ledLevel[]={0,0,0,0,0,0,0,0,0,0, //stores the level for each led
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0};
+        
+  int currSwirlPos=random(0,numPos);  //initial swirl position
+  //The center of all the swirls. This is the LED in the center of the table.
+  //This LED will have its own pattern. Use the index from the physical layout.
+  byte centralInd = 22;
+  ledLevel[ledIndArray[centralInd]] = 4000; //Start with the cenral led on.
+  int centLEDFadeStep = -100;
+  //Change swirl position after x iterations of the loop.
+  byte posChangeThresh = 10;
+  byte currposChangeCnt = 0;
+  long totRunTime=-2;   //the total time the pattern has run
+
+  //Set the LEDs to zero
+  for(int j=0; j < 48; j++)
+      tlc.setPWM(j,0);
+      
+  while(currentPattern==5 && pChange==0 && totRunTime<runLength)
+  {
+     //Get the starting index for the current swirl position
+     byte startInd = 0;
+     for(i=0;i<currSwirlPos;i++)
+          startInd=startInd+swirlCnt[i];
+     //Stop index is the start index plus the number of leds in the current swirl position
+     byte stopInd = startInd+swirlCnt[currSwirlPos];
+                    
+     //Turn on the leds for the current swirl position
+     for(i=startInd;i<stopInd;i++)
+     {
+       ledLevel[ledIndArray[swirlInds[i]]] = ledLevel[ledIndArray[swirlInds[i]]] +500;
+       if(ledLevel[ledIndArray[swirlInds[i]]]>4000)
+         ledLevel[ledIndArray[swirlInds[i]]] = 4000;      
+     }
+    
+     //Fade all the leds except the center
+     //and the current swirl positions
+     for(i=0;i<48;i++)
+     {
+       bool bFade = true;
+       for(j=startInd;j<stopInd;j++)
+       {
+         if(ledIndArray[swirlInds[j]]==i)
+           bFade=false;
+       }
+       if(i!=ledIndArray[centralInd] && bFade==true)
+       {
+         ledLevel[i] = ledLevel[i]-fadeStep;
+         //check to make sure the value is greater than 0
+         if(ledLevel[i]<0)
+           ledLevel[i]=0; 
+       }       
+     }       
+
+    //Fade the central LED. It will fade in and out.
+    ledLevel[ledIndArray[centralInd]]=ledLevel[ledIndArray[centralInd]]+centLEDFadeStep;
+    
+    if(ledLevel[ledIndArray[centralInd]]>4000)
+    {
+      ledLevel[ledIndArray[centralInd]] = 4000;
+      centLEDFadeStep=centLEDFadeStep*-1;  //Change fade direction
+    }
+    if(ledLevel[ledIndArray[centralInd]]<0)
+    {
+      ledLevel[ledIndArray[centralInd]] = 0;
+      centLEDFadeStep=centLEDFadeStep*-1; //Change fade direction
+    }
+          
+    //Move to the next position
+    currposChangeCnt++;  //We only change position after a certain number of loops
+    if(currposChangeCnt>posChangeThresh)
+    {
+      currposChangeCnt=0;
+      currSwirlPos++;
+      if(currSwirlPos>=numPos)
+        currSwirlPos=0;    
+    }
+  
+    //set the TLC
+    for(i=0;i<48;i++)
+    {
+      int adjValue = (int)(ledLevel[i]*ovIntScaleVal);
+      tlc.setPWM(i, adjValue);
+    }    
+    
+    tlc.write();
+    
+    delay(delayAmount);
+      
+    //check to make sure the pattern was called from the random pattern selector
+    if(runLength!=-1)
+        totRunTime=totRunTime+delayAmount;          
+  }  
 }
 
 //snakes
-void runPattern8(int runLength)
+//**********************************************************************************************************
+//This will light up a random LED and then randomly "snake" out from there with a fading tail.
+//input: runLength - the number of milliseconds to run this pattern
+void runPattern6(long runLength)
 {
-  
-}
+  int delayAmount=100;   //delay between loops
+  int fadeStep=150;      //amount to fade the LEDs at each loop
+  int snakeChangeCntThresh = 5; //number of loops before moving to the next LED
+  //(This part is confusing) indOffset is the offset from the
+  //center of the flower for each petal. There are six neighbors for each led.
+  //The offsets are the changes in the index value.
+  //Example: If you consider the physical layout of the leds you have a row of 6
+  //a row of 7, a row of 6, and continuing on
+  //  0, 1, 2, 3, 4, 5
+  //6, 7, 8, 9,10,11,12
+  // 13,14,15,16,17,18
+  //If led 7 is the center, then the neighbors are 6,0,1,8,14,13.
+  //These are the values you get if you add the values in indOffset to 7.
+  //It is more confusing though because the channel on the TLC is not in
+   //the order of the layout of the LEDs so we have to index into ledIndArray.
+  int indOffset[] = {-1,-7,-6,1,7,6};
+  byte numNeighs = 6;
 
-void calcOvIntScaleFac()
-{
-  //Read the potentiometer value
-  int ovIntVal=analogRead(ovIntenPin);
-   //Scale the value
-  ovIntScaleVal = (0.75/1024.0)*ovIntVal + 0.25; 
+  //Edge leds
+  //All the LEDs on the border of the table. When we hit one of these we will change direction.
+  byte borderLEDList[] = {0,
+                          1,2,3,4,
+                          5,
+                          6,19,32,
+                          13,26,
+                          18,31,
+                          12,25,38,
+                          39,
+                          40,41,42,43,
+                          44};
+  int numBorderLED = 22;
+  int potDirList[] =  {/*0*/1,7,6,
+                       /*1*/-1,1,6,7,/*2*/-1,1,6,7,/*3*/-1,1,6,7,/*4*/-1,1,6,7,
+                       /*5*/-1,6,7,
+                       /*6*/-6,1,7,/*19*/-6,1,7,/*32*/-6,1,7,
+                       /*13*/-7,-6,1,6,7,/*26*/-7,-6,1,6,7,
+                       /*18*/-6,-7,-1,6,7,/*31*/-6,-7,-1,6,7,
+                       /*12*/-7,-1,6,/*25*/-7,-1,6,/*38*/-7,-1,6,
+                       /*39*/-7,-6,1,
+                       /*40*/-1,-7,-6,1,/*41*/-1,-7,-6,1,/*42*/-1,-7,-6,1,/*43*/-1,-7,-6,1,
+                       /*44*/-1,-7,-6};
+  byte potDirCntList[] = {3,
+                          4,4,4,4,
+                          3,
+                          3,3,3,
+                          5,5,
+                          5,5,
+                          3,3,3,
+                          3,
+                          4,4,4,4,
+                          3};
+                              
+  int s1Ind=22;  //initial led 1 center
+  int s1IndPrev = 0;
+  int s1CurrOffset=indOffset[random(0,numNeighs)];    
+  byte s1CurrChangeCnt = 1;
+    
+  int ledLevel[]={0,0,0,0,0,0,0,0,0,0, //stores the level for each led
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0};
+        
+  int totRunTime=-2;   //the total time the pattern has run
+  
+  while(currentPattern==6 && pChange==0 && totRunTime<runLength)
+  {           
+     //turn the central led on
+     ledLevel[ledIndArray[s1Ind]]=4000;
+     
+     //After a certain number of iterations, move to the next LED
+    if(s1CurrChangeCnt>=snakeChangeCntThresh)
+    {
+      //Check to see if we are on a border LED.
+      //If we are, then we need to change direction.
+      bool isChangeDir = false;
+      int borderLEDInd=0;      
+      for(int i=0;i<numBorderLED;i++)
+      {        
+        if(s1Ind == borderLEDList[i])
+        {
+          isChangeDir=true;
+          borderLEDInd=i;
+          break;
+        }
+      }
+      //Change direction if necessary
+      if(isChangeDir==true)
+      {
+        byte numPotDirs = potDirCntList[borderLEDInd];
+        byte newDirInd = random(0,numPotDirs);
+        int newDirBeginInd = 0;
+        for(int i=0;i< borderLEDInd;i++)
+          newDirBeginInd = newDirBeginInd+potDirCntList[i];
+        s1CurrOffset = potDirList[newDirBeginInd+newDirInd];
+      }
+      
+      //Continue in the current direction
+      s1Ind = s1Ind + s1CurrOffset;
+
+      s1CurrChangeCnt=0;
+    }
+  
+     //Fade all the leds
+     for(int i=0;i<48;i++)
+     {
+       ledLevel[i] = ledLevel[i]-fadeStep;
+      //check to make sure the value is greater than 0
+      if(ledLevel[i]<0)
+        ledLevel[i]=0;       
+     }  
+      //set the TLC
+      for(int i=0;i<48;i++)
+      {
+        int adjValue = (int)(ledLevel[i]*ovIntScaleVal);
+        tlc.setPWM(i, adjValue);
+      }    
+     
+      tlc.write();
+      
+      delay(delayAmount);
+      
+      //check to make sure the pattern was called from the random pattern selector
+      if(runLength!=-1)
+          totRunTime=totRunTime+delayAmount;
+
+       s1CurrChangeCnt++;
+  }  
 }
 
 void loop() 
-{    
-  //Get an initial value for the overall intensity scale factor
-  calcOvIntScaleFac();
+{      
   delay(1000);
   //*********on interrupt, turn off all LEDs*********************
   //Set the LEDs to zero
@@ -734,31 +942,42 @@ void loop()
   //****************************************************************
   //move to the next pattern after an interrupt
   if(pChange==1)
+  {
+    if(currentPattern<totalPatterns)  
+      currentPattern=currentPattern+1;
+    else
+      currentPattern=1;
+      //reset pChange
+    pChange=0;
+  }
+  else if(pChange==2)   //No motion was detected
+  {
+    //Set the LEDs to zero
+    for(int j=0; j < 48; j++)
     {
-      if(currentPattern<totalPatterns)  
-        currentPattern=currentPattern+1;
-      else
-        currentPattern=1;
-        //reset pChange
-      pChange=0;
+        tlc.setPWM(j,0);
     }
+    tlc.write();
+    //pChange will be reset by the motion_ISR
+    //Wait for a long time. The interrupt will still work so as soon as motion is detected, we will wake up.
+    while(pChange==2)
+    {
+      delay(5000);
+    }
+  }
     
-    //passing -1 to the patterns means that they have no timeout limit
-    if(currentPattern==1)
-      runPattern1();
-    else if(currentPattern==2)
-      runPattern2();
-    else if(currentPattern==3)
-      runPattern3(-1);
-    else if(currentPattern==4)
-      runPattern4(-1);
-    else if(currentPattern==5)
-      runPattern5(-1);
-    else if(currentPattern==6)
-      runPattern6(-1);
-    else if(currentPattern==7)
-      runPattern7(-1);
-    else if(currentPattern==8)
-      runPattern8(-1);
+  //passing -1 to the patterns means that they have no timeout limit
+  if(currentPattern==1)
+    runPattern1();
+  else if(currentPattern==2)
+    runPattern2();
+  else if(currentPattern==3)
+    runPattern3(-1);
+  else if(currentPattern==4)
+    runPattern4(-1);
+  else if(currentPattern==5)
+    runPattern5(-1);
+  else if(currentPattern==6)
+    runPattern6(-1);  
 }
 

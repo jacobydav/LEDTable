@@ -1,3 +1,4 @@
+//Test the snakes pattern. This will light up a random LED and then randomly "snake" out from there with a fading tail.
 #include "src\Adafruit_TLC5947\Adafruit_TLC5947.h"
 #include <avr/interrupt.h>
 
@@ -52,30 +53,22 @@ bool runPatternOnce = true;
 
 //Global parameters for the pattern
 //These can be set by serial input
-int delayAmount=80;   //Parameter A
-int fadeStep=200;      //Parameter B
+int delayAmount=100;   //Parameter A
+int fadeStep=150;      //Parameter B
+int snakeChangeCntThresh = 5; //Parameter C
 
 void setup() 
 {
   Serial.begin(9600);
   Serial.println("Setup begin");
-  //**********interrupt setup begin**************
-  pinMode(2, INPUT);      // Make digital 2 an input
-  // attach our interrupt pin to it's ISR
-  //attachInterrupt(0, patternChange, LOW);
-  // we need to call this to enable interrupts
-  interrupts();
-  pChange=0;
-  currentPattern=4;
-  //**********interrupt setup end**************
-    
   //*********overall intensity setup begin********************
   pinMode(ovIntenPin, INPUT);
   //*********overall intensity setup end********************
-  randomSeed(analogRead(2));  //seed the random number with an unconnected pin(2) read value
+  //randomSeed(analogRead(2));  //seed the random number with an unconnected pin(2) read value
+
+  currentPattern=4;
   
   k=0;
-  
   //TLC5947 init begin
   tlc.begin();
   if (oe >= 0) {
@@ -89,6 +82,12 @@ void setup()
   }
   tlc.write();
   //TLC5947 init end
+}
+
+// The interrupt hardware calls this 
+void patternChange()
+{
+  //pChange=1;
 }
 
 /*
@@ -134,7 +133,20 @@ void serialEvent()
           Serial.print(" setting fadeStep=");
           Serial.println(tempVal);
           fadeStep = tempVal; 
-        }      
+        }
+        else if(inputString[0]=='C')
+        {
+          Serial.print(" setting snakeChangeCntThresh=");
+          Serial.println(tempVal);
+          snakeChangeCntThresh = tempVal; 
+        }
+        else if(inputString[0]=='D')
+        {
+          Serial.print(" setting pChange=");
+          Serial.println(tempVal);
+          pChange = tempVal; 
+        }
+        
       }
       // clear the string:
       strcpy(inputString, "X");
@@ -150,157 +162,152 @@ void serialEvent()
   }
 }
 
-//Swirl
-void runPattern(int runLength)
+//snakes pattern
+//lit up an led, then randomly move to a connected led
+void runPattern4(int runLength)
 {
-  int i,j;  
-    
-  //Each row is the indeces of the LEDs for a position in the swirl.
-  //Note: These are indeces based on the physical layout. So they should be referenced to ledIndArray.
- //Do not include the center LED 
-  byte swirlInds[] = { 0,1,8,15,29,36,43,44,
-                       2,9,16,28,35,42,
-                       3,10,16,28,34,41,
-                       4,11,17,16,28,27,33,40,
-                       5,4,10,16,28,34,40,39,
-                       5,12,18,17,23,21,27,26,32,39,
-                       18,17,23,21,27,26,
-                       25,24,23,21,20,19,
-                       31,30,23,21,14,13,
-                       44,38,31,30,23,21,14,13,6,0,
-                       43,37,30,29,15,14,7,1};
-
-//  byte swirlInds[] = { 42,44,38,31,16,4,12,15,
-//                       46,35,32,20,14,7,
-//                       43,39,32,20,13,6,
-//                       47,41,34,32,20,17,10,5,
-//                       45,47,39,32,20,13,5,3,
-//                       45,40,33,34,26,25,17,19,9,3,
-//                       33,34,26,25,17,19,
-//                       28,24,26,25,21,18,
-//                       22,23,26,25,30,29,
-//                       15,8,22,23,26,25,30,29,36,42};
-                       
-  byte swirlCnt[] = {8,6,6,8,8,10,6,6,6,10,8};
-                        
-  byte numPos = 11;  //the number of swirl positions
+  //int delayAmount=100;
   
+  //(This part is confusing) indOffset is the offset from the
+  //center of the flower for each petal. There are six neighbors for each led.
+  //The offsets are the changes in the index value.
+  //Example: If you consider the physical layout of the leds you have a row of 6
+  //a row of 7, a row of 6, and continuing on
+  //  0, 1, 2, 3, 4, 5
+  //6, 7, 8, 9,10,11,12
+  // 13,14,15,16,17,18
+  //If led 7 is the center, then the neighbors are 6,0,1,8,14,13.
+  //These are the values you get if you add the values in indOffset to 7.
+  //It is more confusing though because the channel on the TLC is not in
+   //the order of the layout of the LEDs so we have to index into ledIndArray.
+  int indOffset[] = {-1,-7,-6,1,7,6};
+  byte numNeighs = 6;
+
+  //Edge leds
+  //All the LEDs on the border of the table. When we hit one of these we will change direction.
+  byte borderLEDList[] = {0,
+                          1,2,3,4,
+                          5,
+                          6,19,32,
+                          13,26,
+                          18,31,
+                          12,25,38,
+                          39,
+                          40,41,42,43,
+                          44};
+  int numBorderLED = 22;
+  int potDirList[] =  {/*0*/1,7,6,
+                       /*1*/-1,1,6,7,/*2*/-1,1,6,7,/*3*/-1,1,6,7,/*4*/-1,1,6,7,
+                       /*5*/-1,6,7,
+                       /*6*/-6,1,7,/*19*/-6,1,7,/*32*/-6,1,7,
+                       /*13*/-7,-6,1,6,7,/*26*/-7,-6,1,6,7,
+                       /*18*/-6,-7,-1,6,7,/*31*/-6,-7,-1,6,7,
+                       /*12*/-7,-1,6,/*25*/-7,-1,6,/*38*/-7,-1,6,
+                       /*39*/-7,-6,1,
+                       /*40*/-1,-7,-6,1,/*41*/-1,-7,-6,1,/*42*/-1,-7,-6,1,/*43*/-1,-7,-6,1,
+                       /*44*/-1,-7,-6};
+  byte potDirCntList[] = {3,
+                          4,4,4,4,
+                          3,
+                          3,3,3,
+                          5,5,
+                          5,5,
+                          3,3,3,
+                          3,
+                          4,4,4,4,
+                          3};
+  /*Serial.println(" begin potDirList");
+  for(int i=0;i<82;i++)
+  {
+    Serial.print(potDirList[i]);
+    Serial.print(",");
+  }
+  Serial.println(" end of potDirList");*/
+                            
+  int s1Ind=22;  //initial led 1 center
+  int s1IndPrev = 0;
+  int s1CurrOffset=indOffset[random(0,numNeighs)];    
+  byte s1CurrChangeCnt = 1;
+    
   int ledLevel[]={0,0,0,0,0,0,0,0,0,0, //stores the level for each led
                   0,0,0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0};
         
-  int currSwirlPos=random(0,numPos);  //initial swirl position
-  //Serial.print("currSwirlPos=");
-  //Serial.println(currSwirlPos);
-  //The center of all the swirls. This is the LED in the center of the table.
-  //This LED will have its own pattern. Use the index from the physical layout.
-  byte centralInd = 22;
-  ledLevel[ledIndArray[centralInd]] = 4000; //Start with the cenral led on.
-  int centLEDFadeStep = -100;
-  //Change swirl position after x iterations of the loop.
-  byte posChangeThresh = 10;
-  byte currposChangeCnt = 0;
   int totRunTime=-2;   //the total time the pattern has run
-
-  //Set the LEDs to zero
-  for(int j=0; j < 48; j++)
-      tlc.setPWM(j,0);
-      
-        
+  
   while(currentPattern==4 && pChange==0 && totRunTime<runLength)
-  {
-    //Get an updated value for the overall intensity scale factor
-    calcOvIntScaleFac();
-    
-     //Get the starting index for the current swirl position
-     byte startInd = 0;
-     for(i=0;i<currSwirlPos;i++)
-          startInd=startInd+swirlCnt[i];
-     //Stop index is the start index plus the number of leds in the current swirl position
-     byte stopInd = startInd+swirlCnt[currSwirlPos];
+  {       
+    //Serial.print("  s1Ind=");
+    //Serial.print(s1Ind);
+      //snake 1     
+     //turn the central led on
+     ledLevel[ledIndArray[s1Ind]]=4000;
      
-     //Serial.print("startInd=");
-     //Serial.println(startInd);
-     //Serial.print("stopInd=");
-     //Serial.println(stopInd);
-               
-     //Turn on the leds for the current swirl position
-     for(i=startInd;i<stopInd;i++)
-     {
-       ledLevel[ledIndArray[swirlInds[i]]] = ledLevel[ledIndArray[swirlInds[i]]] +500;
-       if(ledLevel[ledIndArray[swirlInds[i]]]>4000)
-         ledLevel[ledIndArray[swirlInds[i]]] = 4000;
-       
-       //Serial.print(swirlInds[i]);
-       //Serial.print(",");
-     }
-     //Serial.println("");
-     
-     //Fade all the leds except the center
-     //and the current swirl positions
-     for(i=0;i<48;i++)
-     {
-       bool bFade = true;
-       for(j=startInd;j<stopInd;j++)
-       {
-         if(ledIndArray[swirlInds[j]]==i)
-           bFade=false;
-       }
-       if(i!=ledIndArray[centralInd] && bFade==true)
-       {
-         ledLevel[i] = ledLevel[i]-fadeStep;
-         //check to make sure the value is greater than 0
-         if(ledLevel[i]<0)
-           ledLevel[i]=0; 
-       }       
-     }       
+     //After a certain number of iterations, move to the next LED
+    if(s1CurrChangeCnt>=snakeChangeCntThresh)
+    {
+      //Check to see if we are on a border LED.
+      //If we are, then we need to change direction.
+      bool isChangeDir = false;
+      int borderLEDInd=0;      
+      for(int i=0;i<numBorderLED;i++)
+      {        
+        if(s1Ind == borderLEDList[i])
+        {
+          isChangeDir=true;
+          borderLEDInd=i;
+          break;
+        }
+      }
+      //Change direction if necessary
+      if(isChangeDir==true)
+      {
+        byte numPotDirs = potDirCntList[borderLEDInd];
+        //Serial.print("   numPotDirs=");
+        //Serial.println(numPotDirs);
+        byte newDirInd = random(0,numPotDirs);
+        int newDirBeginInd = 0;
+        for(int i=0;i< borderLEDInd;i++)
+          newDirBeginInd = newDirBeginInd+potDirCntList[i];
+        //Serial.print("   newDirBeginInd=");
+        //Serial.print(newDirBeginInd);
+        s1CurrOffset = potDirList[newDirBeginInd+newDirInd];
+        //Serial.print("   s1CurrOffset=");
+        //Serial.println(s1CurrOffset);
+      }
+      
+      //Continue in the current direction
+      s1Ind = s1Ind + s1CurrOffset;
 
-    //Fade the central LED. It will fade in and out.
-    ledLevel[ledIndArray[centralInd]]=ledLevel[ledIndArray[centralInd]]+centLEDFadeStep;
-    
-    if(ledLevel[ledIndArray[centralInd]]>4000)
-    {
-      ledLevel[ledIndArray[centralInd]] = 4000;
-      centLEDFadeStep=centLEDFadeStep*-1;  //Change fade direction
-    }
-    if(ledLevel[ledIndArray[centralInd]]<0)
-    {
-      ledLevel[ledIndArray[centralInd]] = 0;
-      centLEDFadeStep=centLEDFadeStep*-1; //Change fade direction
-    }
-     
-     
-    //Move to the next position
-    currposChangeCnt++;
-    if(currposChangeCnt>posChangeThresh)
-    {
-      currposChangeCnt=0;
-      currSwirlPos++;
-      if(currSwirlPos>=numPos)
-        currSwirlPos=0;
-      //Serial.print("currSwirlPos=");
-      //Serial.println(currSwirlPos);       
+      s1CurrChangeCnt=0;
     }
   
+     //Fade all the leds
+     for(int i=0;i<48;i++)
+     {
+       ledLevel[i] = ledLevel[i]-fadeStep;
+      //check to make sure the value is greater than 0
+      if(ledLevel[i]<0)
+        ledLevel[i]=0;       
+     }  
       //set the TLC
-      for(i=0;i<48;i++)
+      for(int i=0;i<48;i++)
       {
         int adjValue = (int)(ledLevel[i]*ovIntScaleVal);
         tlc.setPWM(i, adjValue);
       }    
-      /* Tlc.update() sends the data to the TLCs.  This is when the LEDs will
-         actually change. */
+     
       tlc.write();
-      
-      
       
       delay(delayAmount);
       
       //check to make sure the pattern was called from the random pattern selector
       if(runLength!=-1)
-          totRunTime=totRunTime+delayAmount;          
+          totRunTime=totRunTime+delayAmount;
+
+       s1CurrChangeCnt++;
   }  
 }
 
@@ -322,14 +329,12 @@ int freeRam ()
 }
 
 void loop() 
-{    
-  //Get an initial value for the overall intensity scale factor
-  calcOvIntScaleFac();
-  
+{      
     Serial.println("Loop start");
     pChange = 0;
   
-    runPattern(-1);  
+    runPattern4(-1); 
+   runPatternOnce=false; 
     
 }
 

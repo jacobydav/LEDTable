@@ -16,13 +16,20 @@ byte ledIndArray[]={  32,31,27,28,30,29, //the index for each led
                       15,13,12,0,22,16};
 byte ledRowCnt[] = {6,7,6,7,6,7,6};  //The number of LEDs in each row
 
+//Pattern change button begin. This is the button on the control panel that changes
+//the current pattern mode.
+#define patt_change_pin 2    //Digital input 2
 volatile int pChange;          // interrupt for pattern change
 int currentPattern;
+//Pattern change button end
 int k;
 //MSG pin setup
 int analogPin = 0; // read from multiplexer using analog input 0
 int strobePin = 7; // strobe is attached to digital pin 2
 int resetPin = 5; // reset is attached to digital pin 3
+//This digital output will be turned on to power the MSG chip.
+//This will allow me to turn on the chip only when we are in the Sound activated mode.
+#define msg_pwr_pin 13  
 //Overall intensity begin
 //This will give control over the brightness. For example if the table is too
 //bright at night the potentiometer on the control panel can be used to dim it.
@@ -48,6 +55,7 @@ float ambLightScaleMin = 0.2;
 volatile float ambLightScaleVal = 1.0;
 //Ambient light intensity end
 //Motion activation setup begin
+#define motion_pin 3
 unsigned long motion_on_time_ms = 1800000;   //length of time to remain on without seeing any motion, unit is milliseconds
 volatile unsigned long last_motion_time_ms = 0;   //Last time motion was detected. If curr_time - last_motion_time_ms = motion_on_time_ms, then the table will go to sleep.
 //Motion activation setup end
@@ -77,13 +85,13 @@ void setup()
   TCCR1B |= (1 << CS12);    // 256 prescaler 
   TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
   //Mode button interrupt - this will change the current LED pattern
-  pinMode(2, INPUT);      // Make digital 2 an input
+  pinMode(patt_change_pin, INPUT);      // Make digital 2 an input
   // attach our interrupt pin to it's ISR
-  attachInterrupt(0, patternChange, LOW);
+  attachInterrupt(digitalPinToInterrupt(patt_change_pin), patternChange, LOW);  //attachInterrupt(0, patternChange, LOW);
   //Motion detector interrupt - this will happen when motion is detected
-  pinMode(3, INPUT);      // Make digital 2 an input
+  pinMode(motion_pin, INPUT);      // Make digital 3 an input
   // attach our interrupt pin to it's ISR
-  attachInterrupt(1, motion_ISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(motion_pin), motion_ISR, FALLING);  // attachInterrupt(1, motion_ISR, FALLING);
   // we need to call this to enable interrupts
   interrupts();
   pChange=0;
@@ -98,6 +106,9 @@ void setup()
 
   digitalWrite(resetPin, LOW);
   digitalWrite(strobePin, HIGH);
+  //Output pin used to power the MSG chip
+  pinMode(msg_pwr_pin, OUTPUT);
+  digitalWrite(msg_pwr_pin, HIGH);
   //*********msg setup end********************
   //*********overall intensity setup begin********************
   pinMode(ovIntenPin, INPUT);
@@ -596,7 +607,8 @@ void runPattern4(long runLength)
                   7,22,37,
                   0,8,15,23,30,38};
   long totRunTime=-2;   //the total time the pattern has run
-  int currCol=random(0,bcNum);
+  //int currCol=random(0,bcNum);
+  int currCol=0;
   //calculate the offset
   for(i=0;i<currCol;i++)
      ledOffset=ledOffset+bcLedNum[i];
@@ -637,16 +649,16 @@ void runPattern4(long runLength)
         }
         if(dir==1)  //change to next color
         {
-            ledOffset=ledOffset+bcLedNum[currCol];
-              if(currCol==(bcNum-1)) //advance the current color number
-              {
-                currCol=0;
-                ledOffset=0;
-              }
-              else
-              {
-                currCol++;
-              }
+//            ledOffset=ledOffset+bcLedNum[currCol];
+//              if(currCol==(bcNum-1)) //advance the current color number
+//              {
+//                currCol=0;
+//                ledOffset=0;
+//              }
+//              else
+//              {
+//                currCol++;
+//              }
               //randomly select the fade amounts
               fadeOutStep=random(fadeOutStepMin,fadeOutStepMax);
               fadeInStep=random(fadeInStepMin,fadeInStepMax);

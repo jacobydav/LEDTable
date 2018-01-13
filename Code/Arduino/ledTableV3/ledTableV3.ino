@@ -1,7 +1,7 @@
 #include "src\Adafruit_TLC5947\Adafruit_TLC5947.h"
 #include <avr/interrupt.h>
 
-const int totalPatterns=6;
+const int totalPatterns=7;
 const int totalLeds=45;
 
 //This is a representation of the layout of the LEDs viewed from above with the control panel above Row 1.
@@ -607,8 +607,7 @@ void runPattern4(long runLength)
                   7,22,37,
                   0,8,15,23,30,38};
   long totRunTime=-2;   //the total time the pattern has run
-  //int currCol=random(0,bcNum);
-  int currCol=0;
+  int currCol=random(0,bcNum);
   //calculate the offset
   for(i=0;i<currCol;i++)
      ledOffset=ledOffset+bcLedNum[i];
@@ -649,16 +648,16 @@ void runPattern4(long runLength)
         }
         if(dir==1)  //change to next color
         {
-//            ledOffset=ledOffset+bcLedNum[currCol];
-//              if(currCol==(bcNum-1)) //advance the current color number
-//              {
-//                currCol=0;
-//                ledOffset=0;
-//              }
-//              else
-//              {
-//                currCol++;
-//              }
+            ledOffset=ledOffset+bcLedNum[currCol];
+              if(currCol==(bcNum-1)) //advance the current color number
+              {
+                currCol=0;
+                ledOffset=0;
+              }
+              else
+              {
+                currCol++;
+              }
               //randomly select the fade amounts
               fadeOutStep=random(fadeOutStepMin,fadeOutStepMax);
               fadeInStep=random(fadeInStepMin,fadeInStepMax);
@@ -941,6 +940,207 @@ void runPattern6(long runLength)
   }  
 }
 
+//color blend
+//**********************************************************************************************************
+//This will select a random LED and 2 of its neighbors. The three LEDS will be faded individually to
+//create different color blends.
+//input: runLength - the number of milliseconds to run this pattern
+void runPattern7(long runLength)
+{
+  int delayAmount=100;   //delay between loops
+  long changeCntThresh = 1800; //number of loops before moving to the next LED
+  long currChangeCnt = 0; //current number of loops
+  //(This part is confusing) indOffset is the offset from the
+  //center of the flower for each petal. There are six neighbors for each led.
+  //The offsets are the changes in the index value.
+  //Example: If you consider the physical layout of the leds you have a row of 6
+  //a row of 7, a row of 6, and continuing on
+  //  0, 1, 2, 3, 4, 5
+  //6, 7, 8, 9,10,11,12
+  // 13,14,15,16,17,18
+  //If led 7 is the center, then the neighbors are 6,0,1,8,14,13.
+  //These are the values you get if you add the values in indOffset to 7.
+  //It is more confusing though because the channel on the TLC is not in
+   //the order of the layout of the LEDs so we have to index into ledIndArray.
+  int indOffset[] = {-1,-7,-6,1,7,6};
+  byte numNeighs = 6;
+
+  //Edge leds
+  //All the LEDs on the border of the table. When we hit one of these we will change direction.
+  byte borderLEDList[] = {0,
+                          1,2,3,4,
+                          5,
+                          6,19,32,
+                          13,26,
+                          18,31,
+                          12,25,38,
+                          39,
+                          40,41,42,43,
+                          44};
+  int numBorderLED = 22;
+       
+  int ledLevel[]={0,0,0,0,0,0,0,0,0,0, //stores the level for each led
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0,0,0,
+                  0,0,0,0,0,0,0,0};
+        
+  int totRunTime=-2;   //the total time the pattern has run
+  bool isFirstRun=true; //indicates the very first run of the fade loop
+  bool isChangeLED=false; //indicates when a fade routine is complete and its time to change the LEDs
+  byte led1Ind=0;
+  byte led2Ind=0;
+  byte led3Ind=0;
+  int led1Dir = 0;
+  int led2Dir = 0;
+  int led3Dir = 0;
+  int fadeStep1=150;      //amount to fade the LEDs at each loop
+  int fadeStep2=150;      //amount to fade the LEDs at each loop
+  int fadeStep3=150;      //amount to fade the LEDs at each loop
+  
+  while(currentPattern==7 && pChange==0 && totRunTime<runLength)
+  {   
+    if(isChangeLED==true || isFirstRun==true)
+    {      
+      isFirstRun=false;
+      isChangeLED=false;
+      //reset all values to 0
+      for(int i=0;i<48;i++)
+        ledLevel[i]=0;
+        
+      //Get the central led index
+      led1Ind=random(0,44);  //initial led 1 center
+      //Check that the central led is not on the border
+      bool isOnBorder=true;
+      while(isOnBorder==true)
+      {
+        isOnBorder=false;
+        for(int i=0;i<numBorderLED;i++)
+        {
+          if(borderLEDList[i]==led1Ind)
+          {
+            isOnBorder=true;
+            led1Ind=random(0,44);  //initial led 1 center
+            break;
+          }
+        }
+      }
+      //Find 2 random neighbors to use
+      int n1IndOffset=indOffset[random(0,numNeighs)];
+      int n2IndOffset=indOffset[random(0,numNeighs)];
+      //Check that we didn't select the same neighbor
+      while(n1IndOffset==n2IndOffset)
+      {
+        n2IndOffset=indOffset[random(0,numNeighs)];
+      }
+     
+      led2Ind = led1Ind+n1IndOffset;
+      led3Ind = led1Ind+n2IndOffset;
+
+      //Testing begin
+      /*
+      Serial.print("n1IndOffset = ");
+      Serial.println(n1IndOffset);
+      Serial.print("n2IndOffset = ");
+      Serial.println(n2IndOffset);
+      Serial.print("LED 1 Index = ");
+      Serial.println(led1Ind);
+      Serial.print("LED 2 Index = ");
+      Serial.println(led2Ind);
+      Serial.print("LED 3 Index = ");
+      Serial.println(led3Ind);
+      */
+      //Testing end
+      
+      //Set initial LED intensity values
+      ledLevel[ledIndArray[led1Ind]]=random(0,4000);
+      ledLevel[ledIndArray[led2Ind]]=random(0,4000);
+      ledLevel[ledIndArray[led3Ind]]=random(0,4000);
+      //Get fade directions (-1 = fade out, 1 = fade in)
+      led1Dir = random(0,2);
+      if(led1Dir==0)
+        led1Dir=-1;
+      led2Dir = random(0,2);
+      if(led2Dir==0)
+        led2Dir=-1;
+      led3Dir = random(0,2);
+      if(led3Dir==0)
+        led3Dir=-1;
+        //Get fade steps
+      fadeStep1 = random(50,300);
+      fadeStep2 = random(50,300);
+      fadeStep3 = random(50,300);
+    }
+     //begin the fading pattern
+     //LED1
+     ledLevel[ledIndArray[led1Ind]]=ledLevel[ledIndArray[led1Ind]]+led1Dir*fadeStep1;
+     if(ledLevel[ledIndArray[led1Ind]]>4000)
+     {
+         ledLevel[ledIndArray[led1Ind]]=4000;
+         led1Dir=-1;
+     }
+     if(ledLevel[ledIndArray[led1Ind]]<0)
+     {
+         ledLevel[ledIndArray[led1Ind]]=0;
+         led1Dir=1;
+     }
+     //LED2
+     ledLevel[ledIndArray[led2Ind]]=ledLevel[ledIndArray[led2Ind]]+led2Dir*fadeStep2;
+     if(ledLevel[ledIndArray[led2Ind]]>4000)
+     {
+         ledLevel[ledIndArray[led2Ind]]=4000;
+         led2Dir=-1;
+     }
+     if(ledLevel[ledIndArray[led2Ind]]<0)
+     {
+         ledLevel[ledIndArray[led2Ind]]=0;
+         led2Dir=1;
+     }
+     //LED3
+     ledLevel[ledIndArray[led3Ind]]=ledLevel[ledIndArray[led3Ind]]+led3Dir*fadeStep3;
+     if(ledLevel[ledIndArray[led3Ind]]>4000)
+     {
+         ledLevel[ledIndArray[led3Ind]]=4000;
+         led3Dir=-1;
+     }
+     if(ledLevel[ledIndArray[led3Ind]]<0)
+     {
+         ledLevel[ledIndArray[led3Ind]]=0;
+         led3Dir=1;
+     } 
+      //set the TLC
+      for(int i=0;i<48;i++)
+      {
+        int adjValue = (int)(ledLevel[i]*ovIntScaleVal);
+        tlc.setPWM(i, adjValue);
+        //Testing begin
+        //if(adjValue>0)
+        //{
+        //  Serial.print("i = ");
+        //  Serial.print(i);
+        //  Serial.print("  ledLevel[i] = ");
+        //  Serial.println(ledLevel[i]);
+        //}
+        //Testing end
+      }    
+     
+      tlc.write();
+      
+      delay(delayAmount);
+      
+      //check to make sure the pattern was called from the random pattern selector
+      if(runLength!=-1)
+          totRunTime=totRunTime+delayAmount;
+      //After a certain amount of time, change the LEDs
+       currChangeCnt++;
+       if(currChangeCnt>changeCntThresh)
+       {
+          currChangeCnt=0;
+          isChangeLED=true; 
+       }
+  }  
+}
+
 void loop() 
 {      
   delay(1000);
@@ -977,6 +1177,10 @@ void loop()
       delay(5000);
     }
   }
+  //Testing begin
+  //To force a pattern to run, set it here
+  //currentPattern=7;
+  //Testing end
     
   //passing -1 to the patterns means that they have no timeout limit
   if(currentPattern==1)
@@ -990,6 +1194,8 @@ void loop()
   else if(currentPattern==5)
     runPattern5(-1);
   else if(currentPattern==6)
-    runPattern6(-1);  
+    runPattern6(-1);
+  else if(currentPattern==7)
+    runPattern7(-1); 
 }
 
